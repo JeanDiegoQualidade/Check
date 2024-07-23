@@ -4,7 +4,7 @@ from datetime import datetime
 
 # Configuração do Firebase
 firebase_config = {
-    "apiKey": "AIzaSyCRrkvzSEuDgAkno0sMf8m9ojIJF8JQYzU",
+    "apiKey": "AIzaSyCRrkvzSEuDgAkno0sMf8m9ojIJF8m9ojIJF8JQYzU",
     "authDomain": "ckeclist.firebaseapp.com",
     "databaseURL": "https://ckeclist-default-rtdb.firebaseio.com",
     "projectId": "ckeclist",
@@ -17,7 +17,7 @@ database_url = firebase_config["databaseURL"]
 
 def main(page: ft.Page):
     page.title = "Inspetores"
-    
+
     # Função para reiniciar o aplicativo
     def reset_app(e):
         page.clean()
@@ -62,9 +62,157 @@ def main(page: ft.Page):
 
     # Função para mostrar os dados do inspetor após login correto
     def show_inspetor_data(inspetor_data):
-        global nivel_textbox  # Definir como global para acessar na função finalizar_inspecao
+        global numero_chassi_textbox, nivel_textbox, tipo_dropdown, subtipo_dropdown, checklist_container, finalizar_button
+        
+        numero_chassi_textbox = ft.TextField(
+            label="Número Chassi",
+            read_only=True  # Inicialmente somente leitura
+        )
+        
+        # Definir como global para acessar na função finalizar_inspecao
+        global nivel_textbox, tipo_dropdown, subtipo_dropdown, checklist_container
+        
         page.clean()
+        
+        # Função para buscar os tipos do Firebase
+        def fetch_tipos():
+            response = requests.get(f"{database_url}/Tipo.json")
+            if response.status_code == 200:
+                tipos = response.json()
+                return [ft.dropdown.Option(key=tipo, text=tipo) for tipo in tipos.keys()]
+            else:
+                return []
+        
+        # Função para buscar subtipos do tipo selecionado
+        def fetch_subtipos(tipo):
+            response = requests.get(f"{database_url}/Tipo/{tipo}.json")
+            if response.status_code == 200:
+                subtipos = response.json()
+                return [ft.dropdown.Option(key=subtipo, text=subtipo) for subtipo in subtipos.keys()]
+            else:
+                return []
+        
+        # Função para buscar checklist do subtipo selecionado na camada InspecaoChassi
+        def fetch_checklist(subtipo):
+            response = requests.get(f"{database_url}/InspecaoChassi/{subtipo}.json")
+            if response.status_code == 200:
+                checklist_data = response.json()
+                # Verifica se a resposta é um dicionário
+                if isinstance(checklist_data, dict):
+                    return checklist_data
+                else:
+                    print(f"Formato de dados inesperado: {checklist_data}")
+                    return {}
+            else:
+                print(f"Erro ao buscar checklist: {response.status_code}")
+                return {}
+        
+        # Evento para quando um tipo é selecionado
+        def on_tipo_change(e):
+            selected_tipo = tipo_dropdown.value
+            if (selected_tipo):
+                subtipo_options = fetch_subtipos(selected_tipo)
+                subtipo_dropdown.options = subtipo_options
+                subtipo_dropdown.visible = True
+                page.update()
+        
+        # Evento para quando um subtipo é selecionado
+        def on_subtipo_change(e):
+            selected_subtipo = subtipo_dropdown.value
+            if (selected_subtipo):
+                checklist_data = fetch_checklist(selected_subtipo)
+                build_checklist(checklist_data)
+                checklist_container.visible = True
+                page.update()
+        
+        # Função para construir o checklist
+        def build_checklist(checklist_data):
+            checklist_container.clean()
+            controls = []
+            for item, value in checklist_data.items():
+                if value == "x":
+                    controls.append(
+                        ft.Row(
+                            controls=[
+                                ft.Text(value=item),
+                                ft.Checkbox(label="Conforme"),
+                                ft.Checkbox(label="Não Conforme")
+                            ]
+                        )
+                    )
+                elif value == "dx":
+                    controls.append(
+                        ft.Row(
+                            controls=[
+                                ft.Text(value=item),
+                                ft.TextField(label="Detalhe")
+                            ]
+                        )
+                    )
+            # Atualiza o Column com os controles do checklist
+            checklist_container.controls = controls
+            page.update()
+
+            # Adiciona o botão "Finalizar Inspeção"
+            finalizar_button = ft.ElevatedButton(
+                text="Finalizar Inspeção",
+                on_click=finalizar_inspecao
+            )
+            page.add(finalizar_button)
+    ###################################################    
+    def finalizar_inspecao(e):
+        chassi_number = numero_chassi_textbox.value
+        checklist_results = {}
+        for control in checklist_container.controls:
+            if isinstance(control, ft.Row):
+                item_name = control.controls[0].value
+                if len(control.controls) == 3:  # Checkbox
+                    conforme = control.controls[1].value
+                    nao_conforme = control.controls[2].value
+                    checklist_results[item_name] = {
+                        "Conforme": conforme,
+                        "NaoConforme": nao_conforme
+                    }
+                elif len(control.controls) == 2:  # TextField for details
+                    detalhe = control.controls[1].value
+                    checklist_results[item_name] = {
+                        "Detalhe": detalhe
+                    }
+        
+        inspecao_data = {
+            "Chassi": chassi_number,
+            "Data": datetime.now().strftime("%Y-%m-%d"),
+            "Checklist": checklist_results
+        }
+        
+        # Criar o conteúdo do arquivo .txt
+        txt_content = f"Chassi: {chassi_number}\nData: {datetime.now().strftime('%Y-%m-%d')}\n\nChecklist:\n"
+        for item, details in checklist_results.items():
+            txt_content += f"- {item}\n"
+            for key, value in details.items():
+                txt_content += f"  {key}: {value}\n"
+        
+        # Caminho para salvar o arquivo .txt
+        txt_path = "/storage/emulated/0/DriverSyncFiles/Checklist_finalizado.txt"
+        
+        # Salvar o arquivo .txt
+        try:
+            with open(txt_path, 'w') as file:
+                file.write(txt_content)
+            result_message.value = "Inspeção finalizada e arquivo salvo com sucesso."
+            result_message.color = "green"
+        except Exception as e:
+            result_message.value = f"Erro ao salvar arquivo: {e}"
+            result_message.color = "red"
+        
+        page.update()
+        ################################################
+        # Obter opções de tipos
+        tipo_options = fetch_tipos()
+        
+        # Adiciona campos à página
         page.add(
+            numero_chassi_textbox,
             ft.Row(
                 controls=[restart_button],
                 alignment=ft.MainAxisAlignment.START
@@ -83,133 +231,106 @@ def main(page: ft.Page):
                 label="Inspeção",
                 value=str(inspetor_data.get("Inspecao", "")),
                 read_only=True
+            ),
+            ft.Dropdown(
+                label="Tipo",
+                options=tipo_options,
+                on_change=on_tipo_change
+            ),
+            ft.Dropdown(
+                label="Subtipo",
+                options=[],
+                visible=False,
+                on_change=on_subtipo_change
+            ),
+            ft.Column(
+                controls=[],
+                scroll=ft.ScrollMode.AUTO,  # Adiciona rolagem automática
+                width=page.width,  # Ajuste a largura conforme necessário
+                height=500  # Ajuste a altura conforme necessário
             )
         )
-        nivel_textbox = page.controls[2]  # Acessa o controle do nível
+        
+        # Atualiza referências globais
+        nivel_textbox = page.controls[3]  # Acessa o controle do nível
+        tipo_dropdown = page.controls[5]  # Acessa o controle da lista suspensa de tipos
+        subtipo_dropdown = page.controls[6]  # Acessa o controle da lista suspensa de subtipos
+        checklist_container = page.controls[7]  # Acessa o Column para o checklist
+
         nivel = str(inspetor_data.get("Nivel", ""))
         if nivel == "1":
-            show_numero_chassi()
-        elif nivel == "2":
-            show_tipo_dropdown()
+            show_numero_chassi(inspetor_data)
 
+                
     # Função para mostrar campo de número do chassi e botão de iniciar inspeção
-    def show_numero_chassi():
-        global numero_chassi_textbox, iniciar_inspecao_button
-        numero_chassi_textbox = ft.TextField(
-            label="Número Chassi",
-            read_only=False  # Inicialmente somente leitura
-        )
-        iniciar_inspecao_button = ft.ElevatedButton(
-            text="Iniciar Inspeção",
-            on_click=fetch_inspecao_chassi
-        )
-        page.add(
-            numero_chassi_textbox,
-            iniciar_inspecao_button
-        )
-        page.update()
+    def show_numero_chassi(inspetor_data):
+        generate_chassi_number(inspetor_data)
 
-    # Função para mostrar dropdown com tipos
-    def show_tipo_dropdown():
-        response = requests.get(f"{database_url}/Tipo.json")
+    # Função para gerar o número do chassi
+    def generate_chassi_number(inspetor_data):
+        # Busca a sequência atual do Firebase
+        response = requests.get(f"{database_url}/Sequencia.json")
         if response.status_code == 200:
-            tipos = response.json()
-            tipo_dropdown = ft.Dropdown(
-                label="Tipo",
-                options=[ft.dropdown.Option(key=tipo, text=tipo) for tipo in tipos.keys()]
-            )
-            page.add(tipo_dropdown)
-        else:
-            result_message.value = "Erro ao buscar tipos."
-            result_message.color = "red"
-        page.update()
-    
-    # Função para buscar e exibir checklist
-    def fetch_inspecao_chassi(e):
-        numero_chassi_textbox.read_only = False  # Desbloquear campo de texto
-        iniciar_inspecao_button.visible = False  # Ocultar botão de iniciar inspeção
+            try:
+                # Verifica se a resposta é um dicionário válido
+                data = response.json()
+                if isinstance(data, dict) and "Sequencia" in data:
+                    current_sequence = data["Sequencia"]
+                else:
+                    current_sequence = 0
+                
+                # Calcula o ano e a semana atuais
+                now = datetime.now()
+                year = now.strftime("%y")
+                week = now.strftime("%U")
+                new_sequence = current_sequence + 1
 
-        response = requests.get(f"{database_url}/InspecaoChassi/Fatiadoras/FT-170.json")
-        if response.status_code == 200:
-            ft_170_data = response.json()
-            if ft_170_data is not None:
-                display_checklist(ft_170_data)
-            else:
-                result_message.value = "Nenhum dado encontrado para a inspeção."
-                result_message.color = "red"
+                # Constrói o número do chassi
+                chassi_number = f"{week}{year}{new_sequence:1d}"
+                
+                # Atualiza o campo de número do chassi
+                numero_chassi_textbox.value = chassi_number
+                page.update()
+
+                # Incrementa a sequência no Firebase
+                requests.put(f"{database_url}/Sequencia.json", json={"Sequencia": new_sequence})
+            except (AttributeError, TypeError, ValueError) as e:
+                print(f"Erro ao gerar número do chassi: {e}")
+                numero_chassi_textbox.value = "Erro ao gerar número do chassi"
                 page.update()
         else:
-            result_message.value = f"Erro ao buscar inspeção: {response.status_code} - {response.text}"
-            result_message.color = "red"
+            print(f"Erro ao conectar: {response.status_code} - {response.text}")
+            numero_chassi_textbox.value = "Erro ao conectar"
             page.update()
 
-    # Função para exibir checklist com base nos dados
-    def display_checklist(ft_170_data):
-        page.clean()
-        page.add(ft.Row(controls=[restart_button], alignment=ft.MainAxisAlignment.START))
-
-        for key, value in ft_170_data.items():
-            page.add(ft.Text(value=key))
-            
-            if value == "x":
-                page.add(
-                    ft.Row(
-                        controls=[
-                            ft.Checkbox(label="OK"),
-                            ft.Checkbox(label="Não conforme")
-                        ],
-                        alignment=ft.MainAxisAlignment.START
-                    )
-                )
-            elif value == "dx":
-                page.add(ft.TextField(label="Insira valor", read_only=False))
-
-        finalizar_inspecao_button = ft.ElevatedButton(
-            text="Finalizar Inspeção",
-            on_click=finalizar_inspecao
-        )
-        page.add(finalizar_inspecao_button)
-        page.update()
-
-    def finalizar_inspecao(e):
-        numero_chassi = numero_chassi_textbox.value
-        nivel = nivel_textbox.value  # Acessa o valor do controle de nível
-        inspetor = dropdown.value
-        data_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        data = {
-            "Chassi": numero_chassi,
-            "Equipamento": "FT-170",
-            "Nivel": nivel,
-            "Inspetor": inspetor,
-            "Data": data_atual
-        }
-        
-        response = requests.post(f"{database_url}/InspecaoRealizadas.json", json=data)
-        if response.status_code == 200:
-            result_message.value = "Inspeção finalizada e salva com sucesso."
-            result_message.color = "green"
-        else:
-            result_message.value = f"Erro ao salvar inspeção: {response.status_code} - {response.text}"
-            result_message.color = "red"
-        page.update()
-
     def setup_page():
-        global restart_button, dropdown, password_textbox, login_button, result_message
-        restart_button = ft.ElevatedButton(text="Reiniciar", on_click=reset_app)
-        dropdown = ft.Dropdown(label="Selecione um inspetor", on_change=show_password_input)
-        password_textbox = ft.TextField(label="Senha", password=True, visible=False)
-        login_button = ft.ElevatedButton(text="Entrar", visible=False, on_click=check_password)
-        result_message = ft.Text(value="", color="red")
-
+        global dropdown, password_textbox, login_button, result_message, restart_button
+        dropdown = ft.Dropdown(
+            options=[],
+            hint_text="Selecione um inspetor",
+            on_change=show_password_input
+        )
+        password_textbox = ft.TextField(
+            label="Senha",
+            password=True,
+            visible=False
+        )
+        login_button = ft.ElevatedButton(
+            text="Entrar",
+            on_click=check_password,
+            visible=False
+        )
+        result_message = ft.Text("")
+        restart_button = ft.ElevatedButton(
+            text="Reiniciar",
+            on_click=reset_app
+        )
         page.add(
-            ft.Row(controls=[restart_button], alignment=ft.MainAxisAlignment.START),
             dropdown,
             password_textbox,
             login_button,
             result_message
         )
-
         fetch_inspetores()
 
     setup_page()
